@@ -12,6 +12,7 @@
     <nav class="tabs">
       <button id="tabDraft" class="tab active">草稿编辑</button>
       <button id="tabPublished" class="tab">已发布图纸</button>
+      <button id="tabDiff" class="tab">版本核对</button>
       <button id="tabProduction" class="tab">铅条生产</button>
     </nav>
   </header>
@@ -108,6 +109,44 @@
     </aside>
     <section class="canvas-wrap">
       <canvas id="pubCanvas" width="900" height="640"></canvas>
+    </section>
+  </main>
+
+  <!-- ============ 版本核对视图 ============ -->
+  <main id="viewDiff" class="view" hidden>
+    <aside class="panel">
+      <section>
+        <h2>铅条下料版本核对</h2>
+        <label>图纸
+          <select id="diffDesignSelect"></select>
+        </label>
+        <div class="form-row two">
+          <label>较早版本
+            <select id="diffFromSelect"></select>
+          </label>
+          <label>较晚版本
+            <select id="diffToSelect"></select>
+          </label>
+        </div>
+        <button id="btnDiffRun" class="primary big">核对两个版本</button>
+        <div id="diffMsg" class="hint"></div>
+        <div class="hint">共线且空间重叠的铅条算<b>沿用</b>；其余按较早/较晚版记为<b>取消/新增</b>，
+          部分重叠会自动拆分。反向记录、清单顺序、T 接处分段变化不会产生虚假差异。核对为只读。</div>
+      </section>
+      <section>
+        <h2>核对合计</h2>
+        <div id="diffSummary"><div class="hint">选择同一张图纸的两个已发布版本后点击“核对”。</div></div>
+      </section>
+    </aside>
+
+    <section class="canvas-wrap">
+      <div id="diffBanner" class="banner" hidden></div>
+      <canvas id="diffCanvas" width="900" height="520"></canvas>
+      <div id="diffLegend" class="hint"></div>
+      <div class="lead-panel">
+        <h2>线段明细（位置 / 长度 / 合计）</h2>
+        <div id="diffDetail" class="hint">内部公共边与四根外框分别比较；合计先求和再四舍五入到 0.01 mm。</div>
+      </div>
     </section>
   </main>
 

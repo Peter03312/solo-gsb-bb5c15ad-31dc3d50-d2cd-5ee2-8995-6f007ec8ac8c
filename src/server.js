@@ -5,6 +5,7 @@ const express = require('express');
 const db = require('./db');
 const geo = require('./geometry');
 const cut = require('./cutting');
+const leadDiff = require('./diff');
 
 const PORT = parseInt(process.env.PORT || '3000', 10);
 const DB_PATH = process.env.DB_PATH || path.join(__dirname, '..', 'data', 'studio.db');
@@ -246,6 +247,71 @@ app.get('/api/designs/:designId/publications/:version', (req, res) => {
   const pub = db.getPublicationByVersion(design.id, Number(req.params.version));
   if (!pub) return fail(res, 404, '发布版不存在');
   res.json({ ok: true, publication: pub });
+});
+
+// ---------- 铅条下料版本核对（只读） ----------
+
+// 加载两个发布版并完成全部入参校验；失败时写出错误响应并返回 null。
+// 依据版本号自动区分较早版/较晚版（同版本号允许自查，结果全部沿用）。
+function loadDiffPublications(req, res, { designId, aRaw, bRaw }) {
+  const aId = Number(aRaw);
+  const bId = Number(bRaw);
+  if (!Number.isInteger(aId) || aId <= 0 || !Number.isInteger(bId) || bId <= 0) {
+    fail(res, 400, 'a 与 b 必须是已发布版本的正整数 id');
+    return null;
+  }
+  const pubA = db.getPublicationById(aId);
+  const pubB = db.getPublicationById(bId);
+  if (!pubA || !pubB || (designId !== undefined && (pubA.designId !== designId || pubB.designId !== designId))) {
+    fail(res, 404, '发布版不存在');
+    return null;
+  }
+  if (pubA.designId !== pubB.designId) {
+    res.status(409).json({
+      ok: false,
+      error: `两个发布版不属于同一张图纸（分别属于图纸 #${pubA.designId} 与 #${pubB.designId}）`,
+      code: 'different_design',
+      designIds: [pubA.designId, pubB.designId],
+    });
+    return null;
+  }
+  const [earlier, later] = pubA.version <= pubB.version ? [pubA, pubB] : [pubB, pubA];
+  return { earlier, later };
+}
+
+function runDiffOrFail(res, earlier, later) {
+  try {
+    return leadDiff.compareSnapshots(earlier, later);
+  } catch (e) {
+    if (e instanceof leadDiff.DiffError) {
+      const status = e.code === 'frame_mismatch' ? 409 : 422;
+      res.status(status).json({ ok: false, error: e.message, code: e.code });
+      return null;
+    }
+    throw e;
+  }
+}
+
+// 图纸作用域的便捷核对接口（两个版本必须属于该图纸）
+app.get('/api/designs/:designId/publications-diff', (req, res) => {
+  const design = loadDesignOr404(req, res);
+  if (!design) return;
+  const loaded = loadDiffPublications(req, res, {
+    designId: design.id, aRaw: req.query.a, bRaw: req.query.b,
+  });
+  if (!loaded) return;
+  const result = runDiffOrFail(res, loaded.earlier, loaded.later);
+  if (!result) return;
+  res.json({ ok: true, diff: result });
+});
+
+// 全局核对接口：按发布版 id 比较；不属于同一图纸时 409
+app.get('/api/publications-diff', (req, res) => {
+  const loaded = loadDiffPublications(req, res, { aRaw: req.query.a, bRaw: req.query.b });
+  if (!loaded) return;
+  const result = runDiffOrFail(res, loaded.earlier, loaded.later);
+  if (!result) return;
+  res.json({ ok: true, diff: result });
 });
 
 // ---------- 铅条原材库存 ----------

@@ -503,9 +503,9 @@ function renderAllDraft() {
   renderDraft();
 }
 
-async function refreshDesignSelect(selectId, selectId2) {
+async function refreshDesignSelect(...selectIds) {
   const data = await api('GET', '/api/designs');
-  for (const id of [selectId, selectId2].filter(Boolean)) {
+  for (const id of selectIds.filter(Boolean)) {
     const sel = document.getElementById(id);
     const prev = sel.value;
     sel.innerHTML = '';
@@ -675,6 +675,7 @@ function renderPublished() {
 
 document.getElementById('tabDraft').addEventListener('click', () => switchTab('draft'));
 document.getElementById('tabPublished').addEventListener('click', () => switchTab('published'));
+document.getElementById('tabDiff').addEventListener('click', () => switchTab('diff'));
 document.getElementById('tabProduction').addEventListener('click', () => switchTab('production'));
 document.getElementById('btnCreate').addEventListener('click', createDesign);
 document.getElementById('designSelect').addEventListener('change', (e) => loadDraft(Number(e.target.value)));
@@ -707,16 +708,19 @@ document.getElementById('btnPublish').addEventListener('click', publishDraft);
 function switchTab(which) {
   document.getElementById('tabDraft').classList.toggle('active', which === 'draft');
   document.getElementById('tabPublished').classList.toggle('active', which === 'published');
+  document.getElementById('tabDiff').classList.toggle('active', which === 'diff');
   document.getElementById('tabProduction').classList.toggle('active', which === 'production');
   document.getElementById('viewDraft').hidden = which !== 'draft';
   document.getElementById('viewPublished').hidden = which !== 'published';
+  document.getElementById('viewDiff').hidden = which !== 'diff';
   document.getElementById('viewProduction').hidden = which !== 'production';
   if (which === 'published') loadPubVersions();
+  if (which === 'diff') enterDiff();
   if (which === 'production') enterProduction();
 }
 
 (async function init() {
-  const designs = await refreshDesignSelect('designSelect', 'pubDesignSelect');
+  const designs = await refreshDesignSelect('designSelect', 'pubDesignSelect', 'diffDesignSelect');
   if (designs.length) {
     document.getElementById('designSelect').value = designs[0].id;
     await loadDraft(designs[0].id);
@@ -1111,3 +1115,189 @@ function renderPlanList() {
 document.getElementById('btnMatAdd').addEventListener('click', addMaterial);
 document.getElementById('planDesignSelect').addEventListener('change', loadPlanVersions);
 document.getElementById('btnPlanPreview').addEventListener('click', previewPlan);
+
+// ================= 版本核对（只读） =================
+
+const diffView = { publications: [], result: null };
+const diffCanvas = document.getElementById('diffCanvas');
+const diffCtx = diffCanvas.getContext('2d');
+const DIFF_COLORS = {
+  kept: '#2e7d4f',
+  removed: '#c0392b',
+  added: '#1565c0',
+};
+
+async function enterDiff() {
+  document.getElementById('diffBanner').hidden = true;
+  await refreshDesignSelect('diffDesignSelect');
+  await loadDiffVersions();
+}
+
+async function loadDiffVersions() {
+  const designId = Number(document.getElementById('diffDesignSelect').value);
+  const fromSel = document.getElementById('diffFromSelect');
+  const toSel = document.getElementById('diffToSelect');
+  fromSel.innerHTML = '';
+  toSel.innerHTML = '';
+  diffView.publications = [];
+  if (!designId) return;
+  const data = await api('GET', `/api/designs/${designId}/publications`);
+  diffView.publications = data.publications;
+  if (!data.publications.length) {
+    fromSel.innerHTML = '<option value="">（暂无发布版）</option>';
+    toSel.innerHTML = '<option value="">（暂无发布版）</option>';
+    return;
+  }
+  // 列表按版本号降序返回；下拉按版本升序展示，较早版默认选最旧
+  const pubs = [...data.publications].sort((a, b) => a.version - b.version);
+  for (const p of pubs) {
+    for (const sel of [fromSel, toSel]) {
+      const opt = document.createElement('option');
+      opt.value = p.id;
+      opt.textContent = `v${p.version} · ${p.publishedAt}`;
+      sel.appendChild(opt);
+    }
+  }
+  fromSel.value = pubs[0].id;
+  toSel.value = pubs[pubs.length - 1].id;
+}
+
+async function runVersionDiff() {
+  const designId = Number(document.getElementById('diffDesignSelect').value);
+  const a = Number(document.getElementById('diffFromSelect').value);
+  const b = Number(document.getElementById('diffToSelect').value);
+  const msg = document.getElementById('diffMsg');
+  if (!a || !b) { msg.textContent = '请选择两个已发布版本。'; return; }
+  try {
+    const data = await api('GET', `/api/designs/${designId}/publications-diff?a=${a}&b=${b}`);
+    diffView.result = data.diff;
+    msg.textContent = '';
+    document.getElementById('diffBanner').hidden = true;
+    renderDiff();
+  } catch (err) {
+    diffView.result = null;
+    renderDiff();
+    msg.textContent = '⛔ ' + err.message;
+    const banner = document.getElementById('diffBanner');
+    banner.className = 'banner error';
+    banner.hidden = false;
+    banner.textContent = '⛔ ' + err.message;
+  }
+}
+
+function renderDiff() {
+  diffCtx.clearRect(0, 0, diffCanvas.width, diffCanvas.height);
+  document.getElementById('diffSummary').innerHTML = '<div class="hint">选择同一张图纸的两个已发布版本后点击“核对”。</div>';
+  document.getElementById('diffDetail').innerHTML = '内部公共边与四根外框分别比较；合计先求和再四舍五入到 0.01 mm。';
+  document.getElementById('diffLegend').innerHTML = '';
+  const r = diffView.result;
+  if (!r) return;
+
+  const t = getTransform(r.design, diffCanvas);
+  // 底图：窗框
+  diffCtx.fillStyle = '#fbfaf7';
+  diffCtx.fillRect(...t.toPx(0, r.design.height), r.design.width * t.scale, r.design.height * t.scale);
+  diffCtx.strokeStyle = '#bbb';
+  diffCtx.lineWidth = 1.5;
+  diffCtx.strokeRect(...t.toPx(0, r.design.height), r.design.width * t.scale, r.design.height * t.scale);
+
+  const drawFrag = (f, kind) => {
+    const [x1, y1] = t.toPx(f.from[0], f.from[1]);
+    const [x2, y2] = t.toPx(f.to[0], f.to[1]);
+    diffCtx.beginPath();
+    diffCtx.moveTo(x1, y1);
+    diffCtx.lineTo(x2, y2);
+    diffCtx.strokeStyle = DIFF_COLORS[kind];
+    diffCtx.lineWidth = kind === 'kept' ? 6 : 5;
+    diffCtx.globalAlpha = 0.85;
+    diffCtx.lineCap = 'round';
+    diffCtx.stroke();
+    diffCtx.globalAlpha = 1;
+  };
+
+  // 外框先画（沿窗框），内部公共边画在上层
+  for (const side of r.frame.sides) {
+    for (const kind of ['kept', 'removed', 'added']) {
+      side.fragments[kind].forEach((f) => drawFrag(f, kind));
+    }
+  }
+  for (const g of r.internal.groups) {
+    for (const kind of ['kept', 'removed', 'added']) {
+      g.fragments[kind].forEach((f) => drawFrag(f, kind));
+    }
+  }
+
+  // 图例
+  document.getElementById('diffLegend').innerHTML =
+    `<span style="color:${DIFF_COLORS.removed}">■</span> 取消（较早 v${r.earlier.version} 独有）　` +
+    `<span style="color:${DIFF_COLORS.kept}">■</span> 沿用（两版共线重叠）　` +
+    `<span style="color:${DIFF_COLORS.added}">■</span> 新增（较晚 v${r.later.version} 独有）`;
+
+  renderDiffSummary(r);
+  renderDiffDetail(r);
+}
+
+function renderDiffSummary(r) {
+  const row = (label, kept, removed, added) => `<tr>
+    <td>${label}</td>
+    <td class="num" style="color:${DIFF_COLORS.kept}">${fmt(kept)}</td>
+    <td class="num" style="color:${DIFF_COLORS.removed}">${fmt(removed)}</td>
+    <td class="num" style="color:${DIFF_COLORS.added}">${fmt(added)}</td>
+  </tr>`;
+  const html = `<table><thead><tr><th>类别</th><th class="num">沿用</th><th class="num">取消</th><th class="num">新增</th></tr></thead><tbody>
+    ${row('内部公共边', r.internal.totals.kept, r.internal.totals.removed, r.internal.totals.added)}
+    ${row('四根外框', r.frame.totals.kept, r.frame.totals.removed, r.frame.totals.added)}
+    <tr class="totals"><td>合计（mm）</td>
+      <td class="num">${fmt(r.totals.kept)}</td>
+      <td class="num">${fmt(r.totals.removed)}</td>
+      <td class="num">${fmt(r.totals.added)}</td></tr>
+  </tbody></table>
+  <div class="muted">较早版：v${r.earlier.version}（${r.earlier.publishedAt}）；
+    较晚版：v${r.later.version}（${r.later.publishedAt}）。长度单位 mm。</div>`;
+  document.getElementById('diffSummary').innerHTML = html;
+}
+
+function posText(f) {
+  return `(${f.from[0]},${f.from[1]}) → (${f.to[0]},${f.to[1]})`;
+}
+
+function fragTable(frags) {
+  if (!frags.length) return '<div class="muted small">（无）</div>';
+  return '<table><thead><tr><th>位置（mm）</th><th class="num">长度</th></tr></thead><tbody>' +
+    frags.map((f) => `<tr><td>${posText(f)}</td><td class="num">${fmt(f.length)}</td></tr>`).join('') +
+    '</tbody></table>';
+}
+
+function renderDiffDetail(r) {
+  const sumLen = (fs) => fs.reduce((s, f) => s + f.length, 0);
+  const kindBlock = (frags) => `
+    <div class="diff-kind" style="color:${DIFF_COLORS.kept}">沿用（${frags.kept.length} 段，合计 ${fmt(sumLen(frags.kept))}）</div>${fragTable(frags.kept)}
+    <div class="diff-kind" style="color:${DIFF_COLORS.removed}">取消（${frags.removed.length} 段，合计 ${fmt(sumLen(frags.removed))}）</div>${fragTable(frags.removed)}
+    <div class="diff-kind" style="color:${DIFF_COLORS.added}">新增（${frags.added.length} 段，合计 ${fmt(sumLen(frags.added))}）</div>${fragTable(frags.added)}`;
+
+  let html = `<h3 class="diff-h">内部公共边（${r.internal.counts.kept} 沿用 / ${r.internal.counts.removed} 取消 / ${r.internal.counts.added} 新增）</h3>`;
+  if (!r.internal.groups.length) {
+    html += '<div class="muted small">两版均无内部公共边。</div>';
+  }
+  for (const g of r.internal.groups) {
+    const changed = g.counts.removed + g.counts.added > 0;
+    html += `<details class="diff-group" ${changed ? 'open' : ''}>
+      <summary>直线 #${g.id} · 沿用 ${g.counts.kept} 段 ${fmt(g.totals.kept)} mm · 取消 ${fmt(g.totals.removed)} mm · 新增 ${fmt(g.totals.added)} mm</summary>
+      ${kindBlock(g.fragments)}
+    </details>`;
+  }
+
+  html += `<h3 class="diff-h">四根外框</h3>`;
+  for (const side of r.frame.sides) {
+    const changed = side.counts.removed + side.counts.added > 0;
+    html += `<details class="diff-group" ${changed ? 'open' : ''}>
+      <summary>${side.name} · 沿用 ${fmt(side.totals.kept)} · 取消 ${fmt(side.totals.removed)} · 新增 ${fmt(side.totals.added)} mm</summary>
+      ${kindBlock(side.fragments)}
+    </details>`;
+  }
+  html += `<div class="hint">每段长度与分组合计均四舍五入到 0.01 mm；最上方合计是对所有片段“先求和再四舍五入”，因此分组小计之和可能有 ±0.01 mm 的舍入差。</div>`;
+  document.getElementById('diffDetail').innerHTML = html;
+}
+
+document.getElementById('diffDesignSelect').addEventListener('change', loadDiffVersions);
+document.getElementById('btnDiffRun').addEventListener('click', runVersionDiff);

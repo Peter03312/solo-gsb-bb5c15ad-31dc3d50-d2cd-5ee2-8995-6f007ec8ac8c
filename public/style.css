@@ -202,3 +202,13 @@ td.num, th.num { text-align: right; font-variant-numeric: tabular-nums; }
 #viewProduction .badge { display: inline-block; padding: 2px 8px; border-radius: 10px; font-size: 11px; }
 #viewProduction .badge.ok { background: var(--ok-bg); color: var(--ok); }
 #viewProduction .badge.bad { background: var(--danger-bg); color: var(--danger); }
+
+/* ---------- 版本核对 ---------- */
+#diffLegend { font-size: 13px; margin: 6px 2px; }
+#diffCanvas { cursor: default; }
+.diff-h { font-size: 14px; color: var(--primary); margin: 14px 0 6px; }
+.diff-group { border: 1px solid var(--line); border-radius: 8px; padding: 6px 10px; margin-bottom: 6px; background: #fcfbf8; }
+.diff-group > summary { cursor: pointer; font-size: 13px; color: var(--ink); margin-bottom: 0; }
+.diff-kind { font-size: 12px; font-weight: 600; margin: 8px 0 2px; }
+#diffDetail table { margin-bottom: 6px; }
+#diffDetail h3 { font-size: 14px; margin: 14px 0 6px; color: var(--primary); }
