@@ -12,6 +12,7 @@
     <nav class="tabs">
       <button id="tabDraft" class="tab active">草稿编辑</button>
       <button id="tabPublished" class="tab">已发布图纸</button>
+      <button id="tabDiff" class="tab">版本核对</button>
       <button id="tabProduction" class="tab">铅条生产</button>
     </nav>
   </header>
@@ -108,6 +109,59 @@
     </aside>
     <section class="canvas-wrap">
       <canvas id="pubCanvas" width="900" height="640"></canvas>
+    </section>
+  </main>
+
+  <!-- ============ 版本核对视图 ============ -->
+  <main id="viewDiff" class="view" hidden>
+    <aside class="panel">
+      <section>
+        <h2>两版铅条核对</h2>
+        <label>图纸
+          <select id="diffDesignSelect"></select>
+        </label>
+        <div class="form-row two">
+          <label>较早版
+            <select id="diffFromSelect"></select>
+          </label>
+          <label>较晚版
+            <select id="diffToSelect"></select>
+          </label>
+        </div>
+        <div class="btn-row">
+          <button id="btnDiffRun" class="primary big">核对铅条下料变化</button>
+        </div>
+        <div id="diffMsg" class="hint">选择同一图纸的两个已发布版本。只比较空间位置：共线重叠为沿用，较早版独有为取消，较晚版独有为新增；反向记录、清单顺序、T 接分段不产生差异。核对为只读。</div>
+      </section>
+
+      <section>
+        <h2>合计（内部公共边 + 四框）</h2>
+        <div id="diffSummary"></div>
+      </section>
+
+      <section>
+        <h2>内部公共边明细</h2>
+        <div id="diffInternal"></div>
+      </section>
+
+      <section>
+        <h2>四根外框明细</h2>
+        <div id="diffFrame"></div>
+      </section>
+    </aside>
+
+    <section class="canvas-wrap">
+      <div id="diffBanner" class="banner" hidden></div>
+      <canvas id="diffCanvas" width="900" height="640"></canvas>
+      <div class="lead-panel">
+        <h2 id="diffLegendTitle">铅条变化图</h2>
+        <div class="diff-legend">
+          <span><i class="lg kept"></i>沿用（两版共线重叠）</span>
+          <span><i class="lg removed"></i>取消（较早版独有）</span>
+          <span><i class="lg added"></i>新增（较晚版独有）</span>
+        </div>
+        <div id="diffCanvasHint" class="hint">选择两个发布版后点击“核对”，结果同时在图与表中展示。</div>
+      </div>
     </section>
   </main>
 

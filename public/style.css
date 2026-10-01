@@ -202,3 +202,25 @@ td.num, th.num { text-align: right; font-variant-numeric: tabular-nums; }
 #viewProduction .badge { display: inline-block; padding: 2px 8px; border-radius: 10px; font-size: 11px; }
 #viewProduction .badge.ok { background: var(--ok-bg); color: var(--ok); }
 #viewProduction .badge.bad { background: var(--danger-bg); color: var(--danger); }
+
+/* ---------- 版本核对 ---------- */
+.diff-sum { margin: 6px 0 8px; }
+.diff-tag {
+  display: inline-block; padding: 1px 8px; border-radius: 10px; font-size: 11px; color: #fff;
+}
+.diff-tag.kept { background: #1565c0; }
+.diff-tag.removed { background: #d32f2f; }
+.diff-tag.added { background: #2e7d4f; }
+td.kept.num, th.kept.num { color: #1565c0; }
+td.removed.num, th.removed.num { color: #d32f2f; }
+td.added.num, th.added.num { color: #2e7d4f; }
+
+.diff-legend { display: flex; gap: 16px; flex-wrap: wrap; font-size: 13px; margin: 4px 0; }
+.diff-legend span { display: inline-flex; align-items: center; gap: 6px; }
+.diff-legend .lg { width: 22px; height: 5px; border-radius: 3px; display: inline-block; }
+.diff-legend .lg.kept { background: #1565c0; }
+.diff-legend .lg.removed {
+  background: repeating-linear-gradient(45deg, #d32f2f, #d32f2f 4px, #fff 4px, #fff 8px);
+  border: 1px solid #d32f2f;
+}
+.diff-legend .lg.added { background: #2e7d4f; }

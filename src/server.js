@@ -5,6 +5,7 @@ const express = require('express');
 const db = require('./db');
 const geo = require('./geometry');
 const cut = require('./cutting');
+const leadDiff = require('./leaddiff');
 
 const PORT = parseInt(process.env.PORT || '3000', 10);
 const DB_PATH = process.env.DB_PATH || path.join(__dirname, '..', 'data', 'studio.db');
@@ -238,6 +239,70 @@ app.post('/api/designs/:designId/publish', (req, res) => {
   };
   const pub = db.publishVersion(design.id, snapshot);
   res.status(201).json({ ok: true, publication: pub });
+});
+
+// 核对两个发布版的铅条下料差异（只读，不改快照/计划/库存）。
+// 结果以较早版为基准：kept 沿用 / removed 较早版取消 / added 较晚版新增。
+// 若两版顺序颠倒，自动按版本号交换。
+function buildPublicationDiff(pubA, pubB) {
+  const [earlier, later] = pubA.version <= pubB.version ? [pubA, pubB] : [pubB, pubA];
+  const r = leadDiff.diffPublications(earlier, later);
+  if (!r.ok) return { error: r.error, status: 422 };
+  return {
+    meta: {
+      designId: earlier.designId,
+      designName: earlier.snapshot.name,
+      earlier: { id: earlier.id, version: earlier.version, publishedAt: earlier.publishedAt },
+      later: { id: later.id, version: later.version, publishedAt: later.publishedAt },
+      width: later.snapshot.width,
+      height: later.snapshot.height,
+    },
+    diff: r.comparison,
+  };
+}
+
+// GET：同一图纸 + 两个版本号（最易在浏览器/curl 调用）
+//   /api/designs/:designId/publications/diff?fromVersion=1&toVersion=2
+app.get('/api/designs/:designId/publications/diff', (req, res) => {
+  const design = loadDesignOr404(req, res);
+  if (!design) return;
+  const fromVersion = Number(req.query.fromVersion);
+  const toVersion = Number(req.query.toVersion);
+  if (!Number.isInteger(fromVersion) || !Number.isInteger(toVersion) ||
+      fromVersion <= 0 || toVersion <= 0) {
+    return fail(res, 400, 'fromVersion/toVersion 必须是正整数版本号');
+  }
+  const pubA = db.getPublicationByVersion(design.id, fromVersion);
+  if (!pubA) return fail(res, 404, `发布版 v${fromVersion} 不存在`);
+  const pubB = db.getPublicationByVersion(design.id, toVersion);
+  if (!pubB) return fail(res, 404, `发布版 v${toVersion} 不存在`);
+  const built = buildPublicationDiff(pubA, pubB);
+  if (built.error) return fail(res, built.status, built.error);
+  res.json({ ok: true, ...built });
+});
+
+// POST：两个发布版 id（可跨图纸时明确报错）
+//   { publicationIdA: 1, publicationIdB: 2 }
+app.post('/api/publications/diff', (req, res) => {
+  const body = req.body || {};
+  const idA = Number(body.publicationIdA);
+  const idB = Number(body.publicationIdB);
+  if (!Number.isInteger(idA) || !Number.isInteger(idB) || idA <= 0 || idB <= 0) {
+    return fail(res, 400, 'publicationIdA/publicationIdB 必须是发布版的正整数 id');
+  }
+  const pubA = db.getPublicationById(idA);
+  if (!pubA) return fail(res, 404, `发布版 id=${idA} 不存在`);
+  const pubB = db.getPublicationById(idB);
+  if (!pubB) return fail(res, 404, `发布版 id=${idB} 不存在`);
+  if (pubA.designId !== pubB.designId) {
+    return fail(res, 400, '两个发布版不属于同一图纸，不能核对铅条', {
+      designIdA: pubA.designId,
+      designIdB: pubB.designId,
+    });
+  }
+  const built = buildPublicationDiff(pubA, pubB);
+  if (built.error) return fail(res, built.status, built.error);
+  res.json({ ok: true, ...built });
 });
 
 app.get('/api/designs/:designId/publications/:version', (req, res) => {

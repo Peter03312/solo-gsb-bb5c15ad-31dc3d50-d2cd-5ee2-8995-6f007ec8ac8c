@@ -707,11 +707,14 @@ document.getElementById('btnPublish').addEventListener('click', publishDraft);
 function switchTab(which) {
   document.getElementById('tabDraft').classList.toggle('active', which === 'draft');
   document.getElementById('tabPublished').classList.toggle('active', which === 'published');
+  document.getElementById('tabDiff').classList.toggle('active', which === 'diff');
   document.getElementById('tabProduction').classList.toggle('active', which === 'production');
   document.getElementById('viewDraft').hidden = which !== 'draft';
   document.getElementById('viewPublished').hidden = which !== 'published';
+  document.getElementById('viewDiff').hidden = which !== 'diff';
   document.getElementById('viewProduction').hidden = which !== 'production';
   if (which === 'published') loadPubVersions();
+  if (which === 'diff') enterDiff();
   if (which === 'production') enterProduction();
 }
 
@@ -728,6 +731,229 @@ function switchTab(which) {
     ctx.fillText('请在左侧“新建图纸”，输入正整数毫米的窗框宽高', canvas.width / 2, canvas.height / 2);
   }
 })();
+
+// ================= 版本核对 =================
+
+const diffState = { result: null };
+
+const diffCanvas = document.getElementById('diffCanvas');
+const diffCtx = diffCanvas.getContext('2d');
+
+const DIFF_STYLE = {
+  kept: { color: '#1565c0', text: '沿用' },
+  removed: { color: '#d32f2f', text: '取消' },
+  added: { color: '#2e7d4f', text: '新增' },
+};
+
+async function enterDiff() {
+  await refreshDesignSelect('diffDesignSelect');
+  await loadDiffVersions();
+}
+
+async function loadDiffVersions() {
+  const id = document.getElementById('diffDesignSelect').value;
+  const fromSel = document.getElementById('diffFromSelect');
+  const toSel = document.getElementById('diffToSelect');
+  fromSel.innerHTML = '';
+  toSel.innerHTML = '';
+  if (!id) return;
+  const data = await api('GET', `/api/designs/${id}/publications`);
+  const pubs = data.publications; // 版本倒序
+  if (!pubs.length) {
+    fromSel.innerHTML = '<option value="">（暂无发布版）</option>';
+    toSel.innerHTML = '<option value="">（暂无发布版）</option>';
+    return;
+  }
+  const asc = pubs.slice().reverse();
+  for (const p of asc) {
+    for (const sel of [fromSel, toSel]) {
+      const opt = document.createElement('option');
+      opt.value = p.version;
+      opt.textContent = `v${p.version} · ${p.publishedAt}`;
+      sel.appendChild(opt);
+    }
+  }
+  fromSel.value = asc[asc.length - 2] ? asc[asc.length - 2].version : asc[0].version;
+  toSel.value = asc[asc.length - 1].version;
+}
+
+async function runDiff() {
+  const designId = document.getElementById('diffDesignSelect').value;
+  const fromVersion = Number(document.getElementById('diffFromSelect').value);
+  const toVersion = Number(document.getElementById('diffToSelect').value);
+  const msg = document.getElementById('diffMsg');
+  if (!designId || !fromVersion || !toVersion) {
+    msg.textContent = '请选择同一图纸的两个已发布版本。';
+    return;
+  }
+  if (fromVersion === toVersion) {
+    msg.textContent = '请选择两个不同的版本（同版本可比较，但所有线段都会归为“沿用”）。';
+  } else {
+    msg.textContent = '';
+  }
+  try {
+    const url = `/api/designs/${designId}/publications/diff?fromVersion=${fromVersion}&toVersion=${toVersion}`;
+    const data = await api('GET', url);
+    diffState.result = data;
+    renderDiff();
+    showDiffBanner(false);
+  } catch (err) {
+    diffState.result = null;
+    renderDiffEmpty();
+    showDiffBanner('error', err.message);
+  }
+}
+
+function showDiffBanner(kind, text) {
+  const b = document.getElementById('diffBanner');
+  if (!kind) { b.hidden = true; b.textContent = ''; return; }
+  b.className = `banner ${kind === 'error' ? 'error' : 'success'}`;
+  b.hidden = false;
+  b.textContent = text;
+}
+
+function renderDiffEmpty() {
+  diffCtx.clearRect(0, 0, diffCanvas.width, diffCanvas.height);
+  document.getElementById('diffSummary').innerHTML = '';
+  document.getElementById('diffInternal').innerHTML = '';
+  document.getElementById('diffFrame').innerHTML = '';
+}
+
+function renderDiff() {
+  const { meta, diff } = diffState.result;
+
+  // ---- 合计卡 ----
+  document.getElementById('diffSummary').innerHTML = `
+    <div class="muted" style="margin:0 0 6px">
+      <b>${escapeHtml(meta.designName || `图纸 #${meta.designId}`)}</b><br>
+      v${meta.earlier.version}（${meta.earlier.publishedAt}） →
+      v${meta.later.version}（${meta.later.publishedAt}）<br>
+      窗框 ${meta.width} × ${meta.height} mm
+    </div>
+    ${summaryTable(diff.internal.totals, diff.internal.counts, '内部公共边')}
+    ${summaryTable(diff.frameTotals, diff.frameCounts, '四根外框')}
+    ${summaryTable(diff.totals, diff.counts, '铅条总长')}
+    <div class="hint">合计均先对各段原始长度求和，再四舍五入到 0.01 mm。</div>`;
+
+  // ---- 内部明细 ----
+  const intEl = document.getElementById('diffInternal');
+  const ic = diff.internal;
+  if (!ic.kept.length && !ic.removed.length && !ic.added.length) {
+    intEl.innerHTML = '<div class="hint">两版都没有内部公共边。</div>';
+  } else {
+    let html = '<table><thead><tr><th>类别</th><th>起点 → 终点 (mm)</th><th class="num">长度</th></tr></thead><tbody>';
+    html += rowsOf(ic.removed, 'removed');
+    html += rowsOf(ic.added, 'added');
+    html += rowsOf(ic.kept, 'kept');
+    html += `<tr class="totals"><td colspan="2">内部公共边合计</td><td class="num">
+      沿用 ${fmt(ic.totals.kept)} / 取消 ${fmt(ic.totals.removed)} / 新增 ${fmt(ic.totals.added)}</td></tr>`;
+    html += '</tbody></table>';
+    intEl.innerHTML = html;
+  }
+
+  // ---- 外框明细 ----
+  const frEl = document.getElementById('diffFrame');
+  let frHtml = '<table><thead><tr><th>外框</th><th>沿用</th><th>取消</th><th>新增</th></tr></thead><tbody>';
+  for (const side of diff.frameOrder) {
+    const f = diff.frame[side];
+    frHtml += `<tr><td>${side}</td>
+      <td class="num kept">${f.counts.kept ? `${fmt(f.totals.kept)}（${f.counts.kept}）` : '—'}</td>
+      <td class="num removed">${f.counts.removed ? `${fmt(f.totals.removed)}（${f.counts.removed}）` : '—'}</td>
+      <td class="num added">${f.counts.added ? `${fmt(f.totals.added)}（${f.counts.added}）` : '—'}</td></tr>`;
+  }
+  frHtml += `<tr class="totals"><td>外框合计</td>
+    <td class="num kept">${fmt(diff.frameTotals.kept)}</td>
+    <td class="num removed">${fmt(diff.frameTotals.removed)}</td>
+    <td class="num added">${fmt(diff.frameTotals.added)}</td></tr>`;
+  frHtml += '</tbody></table>';
+  frEl.innerHTML = frHtml;
+
+  document.getElementById('diffCanvasHint').textContent =
+    `共沿用 ${diff.counts.kept} 段、取消 ${diff.counts.removed} 段、新增 ${diff.counts.added} 段；部分重叠处已按端点拆分。`;
+
+  renderDiffCanvas();
+}
+
+function summaryTable(totals, counts, title) {
+  return `<table class="diff-sum"><thead><tr><th>${title}</th><th class="num">沿用</th><th class="num">取消</th><th class="num">新增</th></tr></thead>
+    <tbody><tr>
+      <td class="muted">${counts.kept} / ${counts.removed} / ${counts.added} 段</td>
+      <td class="num kept">${fmt(totals.kept)}</td>
+      <td class="num removed">${fmt(totals.removed)}</td>
+      <td class="num added">${fmt(totals.added)}</td>
+    </tr></tbody></table>`;
+}
+
+function rowsOf(list, kind) {
+  return list.map((s) => `<tr>
+    <td><span class="diff-tag ${kind}">${DIFF_STYLE[kind].text}</span></td>
+    <td>(${s.from[0]},${s.from[1]}) → (${s.to[0]},${s.to[1]})</td>
+    <td class="num">${fmt(s.length)}</td></tr>`).join('');
+}
+
+function renderDiffCanvas() {
+  const { diff } = diffState.result;
+  const frame = { width: diff.width, height: diff.height };
+  const t = getTransform(frame, diffCanvas);
+  diffCtx.clearRect(0, 0, diffCanvas.width, diffCanvas.height);
+
+  // 背景
+  diffCtx.fillStyle = '#fbfaf7';
+  diffCtx.fillRect(...t.toPx(0, frame.height), frame.width * t.scale, frame.height * t.scale);
+
+  // 先画取消/新增（偏离中线向两侧微移，避免与沿用重叠时互相盖住）
+  drawDiffSegments(diff.internal.removed, 'removed', t, -2.5);
+  for (const side of diff.frameOrder) drawDiffSegments(diff.frame[side].removed, 'removed', t, -2.5);
+  drawDiffSegments(diff.internal.added, 'added', t, 2.5);
+  for (const side of diff.frameOrder) drawDiffSegments(diff.frame[side].added, 'added', t, 2.5);
+  // 沿用最后画在中线上
+  drawDiffSegments(diff.internal.kept, 'kept', t, 0);
+  for (const side of diff.frameOrder) drawDiffSegments(diff.frame[side].kept, 'kept', t, 0);
+
+  // 窗框
+  diffCtx.strokeStyle = '#222';
+  diffCtx.lineWidth = 2;
+  diffCtx.strokeRect(...t.toPx(0, frame.height), frame.width * t.scale, frame.height * t.scale);
+}
+
+function drawDiffSegments(list, kind, t, offsetPx) {
+  if (!list.length) return;
+  diffCtx.lineCap = 'round';
+  for (const s of list) {
+    let [x1, y1] = t.toPx(s.from[0], s.from[1]);
+    let [x2, y2] = t.toPx(s.to[0], s.to[1]);
+    if (offsetPx) {
+      const nx = -(y2 - y1);
+      const ny = x2 - x1;
+      const nl = Math.hypot(nx, ny) || 1;
+      x1 += nx / nl * offsetPx; x2 += nx / nl * offsetPx;
+      y1 += ny / nl * offsetPx; y2 += ny / nl * offsetPx;
+    }
+    diffCtx.beginPath();
+    diffCtx.moveTo(x1, y1);
+    diffCtx.lineTo(x2, y2);
+    diffCtx.strokeStyle = DIFF_STYLE[kind].color;
+    diffCtx.globalAlpha = kind === 'kept' ? 0.9 : 0.75;
+    diffCtx.lineWidth = kind === 'kept' ? 4 : 6;
+    if (kind === 'removed') diffCtx.setLineDash([7, 5]); else diffCtx.setLineDash([]);
+    diffCtx.stroke();
+    diffCtx.setLineDash([]);
+    diffCtx.globalAlpha = 1;
+    // 端点
+    for (const [x, y] of [[x1, y1], [x2, y2]]) {
+      if (kind !== 'kept' || offsetPx === 0) {
+        diffCtx.beginPath();
+        diffCtx.arc(x, y, 2.5, 0, Math.PI * 2);
+        diffCtx.fillStyle = DIFF_STYLE[kind].color;
+        diffCtx.fill();
+      }
+    }
+  }
+}
+
+document.getElementById('tabDiff').addEventListener('click', () => switchTab('diff'));
+document.getElementById('diffDesignSelect').addEventListener('change', loadDiffVersions);
+document.getElementById('btnDiffRun').addEventListener('click', runDiff);
 
 // ================= 铅条生产 =================
 
